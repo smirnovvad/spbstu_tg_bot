@@ -7,7 +7,7 @@ use chrono::prelude::*;
 use chrono::Duration;
 use serde_json::Value;
 
-fn parse_group(link: &str, days: i64) -> Option<Value> {
+async fn parse_group(link: &str, days: i64) -> Option<Value> {
     let dt: DateTime<Local> = Local::now() + Duration::days(days);
     let api = "http://ruz2.spbstu.ru/api/v1/ruz/scheduler/";
     let uri = match Url::parse(&format!(
@@ -19,7 +19,7 @@ fn parse_group(link: &str, days: i64) -> Option<Value> {
         Ok(res) => res,
         Err(err) => panic!("{:?}", err),
     };
-    let mut body = match reqwest::get(uri) {
+    let mut body = match reqwest::blocking::get(uri) {
         Ok(res) => res,
         Err(err) => panic!("{:?}", err),
     };
@@ -30,12 +30,12 @@ fn parse_group(link: &str, days: i64) -> Option<Value> {
     // println!("{:?}", body);
     let week: Value = serde_json::from_str(&*body).expect("JSON was not well-formatted");
 
-    Some(week.clone())
+    Some(week)
 }
 
-pub fn parse_week(link: &str, days: i64) -> String {
+pub async fn parse_week(link: &str, days: i64) -> String {
     let mut out = String::new();
-    let week: Value = parse_group(link, days).unwrap();
+    let week: Value = parse_group(link, days).await.unwrap();
     let week = week["week"].as_object().unwrap();
     let date_start = &week["date_start"].as_str().unwrap_or("");
     let date_end = &week["date_end"].as_str().unwrap_or("");
@@ -53,9 +53,9 @@ pub fn parse_week(link: &str, days: i64) -> String {
     out
 }
 
-pub fn parse_day(link: &str, date: u32, days: i64) -> String {
+pub async fn parse_day(link: &str, date: u32, days: i64) -> String {
     let mut out = String::new();
-    let week: Value = parse_group(link, days).unwrap();
+    let week: Value = parse_group(link, days).await.unwrap();
     let days = week["days"].as_array().unwrap();
     // println!("{:?}", days);
     let date = date % 7;

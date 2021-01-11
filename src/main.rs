@@ -2,7 +2,6 @@
 extern crate chrono;
 extern crate futures;
 extern crate telegram_bot;
-extern crate tokio_core;
 #[macro_use]
 extern crate diesel;
 extern crate dotenv;
@@ -19,14 +18,11 @@ use diesel::dsl::*;
 use diesel::insert_into;
 use diesel::prelude::*;
 use dotenv::dotenv;
-use futures::{Future, Stream};
+use futures::StreamExt;
 use std::env;
-use std::thread;
-use std::time::Duration;
 use telegram_bot::prelude::*;
 use telegram_bot::types::*;
 use telegram_bot::{Api, Message, MessageKind, ParseMode, UpdateKind};
-use tokio_core::reactor::{Core, Handle};
 
 use schema::groups::dsl::*;
 use schema::users::dsl::*;
@@ -63,7 +59,8 @@ fn send_message(api: Api, message: Message) {
             .unwrap();
         let mut user: User = match select(exists(
             users.filter(tg_id.eq(i64::from(message.from.id) as i32)),
-        )).get_result(&connection)
+        ))
+        .get_result(&connection)
         {
             Ok(true) => users
                 .filter(tg_id.eq(i64::from(message.from.id) as i32))
@@ -76,7 +73,8 @@ fn send_message(api: Api, message: Message) {
                         tg_name.eq(&message.from.first_name),
                         group_id.eq(group.id),
                     )])
-                    .execute(&connection).unwrap();
+                    .execute(&connection)
+                    .unwrap();
                 users
                     .filter(tg_id.eq(i64::from(message.from.id) as i32))
                     .get_result(&connection)
@@ -90,21 +88,17 @@ fn send_message(api: Api, message: Message) {
         let mut inline_keyboard = InlineKeyboardMarkup::new();
         inline_keyboard.add_row(
             [
-                InlineKeyboardButton::callback(
-                    "На сегодня",
-                    format!("day,{},0", &group.api_id),
-                ),
-                InlineKeyboardButton::callback(
-                    "На завтра",
-                    format!("day,{},1", &group.api_id),
-                ),
-            ].to_vec(),
+                InlineKeyboardButton::callback("На сегодня", format!("day,{},0", &group.api_id)),
+                InlineKeyboardButton::callback("На завтра", format!("day,{},1", &group.api_id)),
+            ]
+            .to_vec(),
         );
         inline_keyboard.add_row(
             [InlineKeyboardButton::callback(
                 "Неделя",
                 format!("week,{},0", &group.api_id),
-            )].to_vec(),
+            )]
+            .to_vec(),
         );
         // if user.notify {
         //     inline_keyboard.add_row(
@@ -123,32 +117,29 @@ fn send_message(api: Api, message: Message) {
         // }
         let mut reply_keyboard = ReplyKeyboardMarkup::new();
         if user.notify {
-            reply_keyboard
-                .add_row([KeyboardButton::new("Выкл. уведомления 🔕")].to_vec());
+            reply_keyboard.add_row([KeyboardButton::new("Выкл. уведомления 🔕")].to_vec());
         } else {
-            reply_keyboard
-                .add_row([KeyboardButton::new("Вкл. уведомления 🔔")].to_vec());
+            reply_keyboard.add_row([KeyboardButton::new("Вкл. уведомления 🔔")].to_vec());
         }
         reply_keyboard.resize_keyboard();
 
-        api.spawn(
-            message
-                .from
-                .text("Выбирай")
-                .reply_markup(reply_keyboard)
-        );
+        api.spawn(message.from.text("Выбирай").reply_markup(reply_keyboard));
         api.spawn(
             message
                 .from
                 .text(format!("Группа - {}", &group.name))
-                .reply_markup(inline_keyboard)
-
+                .reply_markup(inline_keyboard),
         );
     }
 }
 
 fn send_start(api: Api, message: Message) {
-    api.spawn(message.from.text("Напиши номер группы.").reply_markup(ReplyKeyboardRemove::new()));
+    api.spawn(
+        message
+            .from
+            .text("Напиши номер группы.")
+            .reply_markup(ReplyKeyboardRemove::new()),
+    );
 }
 
 fn send_notify(api: Api, message: Message) {
@@ -157,7 +148,8 @@ fn send_notify(api: Api, message: Message) {
 
     let mut user: User = match select(exists(
         users.filter(tg_id.eq(i64::from(message.from.id) as i32)),
-    )).get_result(&connection)
+    ))
+    .get_result(&connection)
     {
         Ok(true) => users
             .filter(tg_id.eq(i64::from(message.from.id) as i32))
@@ -175,16 +167,15 @@ fn send_notify(api: Api, message: Message) {
     }
     diesel::update(users.find(user.id))
         .set(notify.eq(user.notify))
-        .execute(&connection).unwrap();
+        .execute(&connection)
+        .unwrap();
     // let groups: &Vec<serde_json::Value> = &notify.as_array_mut().unwrap();
 
     let mut reply_keyboard = ReplyKeyboardMarkup::new();
     if user.notify {
-        reply_keyboard
-            .add_row([KeyboardButton::new("Выкл. уведомления 🔕")].to_vec());
+        reply_keyboard.add_row([KeyboardButton::new("Выкл. уведомления 🔕")].to_vec());
     } else {
-        reply_keyboard
-            .add_row([KeyboardButton::new("Вкл. уведомления 🔔")].to_vec());
+        reply_keyboard.add_row([KeyboardButton::new("Вкл. уведомления 🔔")].to_vec());
     }
     reply_keyboard.resize_keyboard();
 
@@ -196,36 +187,34 @@ fn send_notify(api: Api, message: Message) {
     );
 }
 
-fn check_message(api: Api, message: Message) {
+async fn check_message(api: Api, message: Message) -> Result<(), Error> {
     let connection = establish_connection();
 
-    let function: fn(Api, Message) = match message.kind {
-        MessageKind::Text { ref data, .. } => match diesel::dsl::select(diesel::dsl::exists(
-            groups.filter(name.eq(data)),
-        )).get_result(&connection)
+    if let MessageKind::Text { ref data, .. } = message.kind {
+        match diesel::dsl::select(diesel::dsl::exists(groups.filter(name.eq(data))))
+            .get_result(&connection)
         {
-            Ok(true) => send_message,
+            Ok(true) => send_message(api, message),
             _ => match data.as_str() {
-                "/start" => send_start,
-                "Вкл. уведомления 🔔" => send_notify,
-                "Выкл. уведомления 🔕" => send_notify,
-                _ => {
-                    println!("{}", data);
-                    return;
-                }
+                "/start" => send_start(api, message),
+                "Вкл. уведомления 🔔" => send_notify(api, message),
+                "Выкл. уведомления 🔕" => send_notify(api, message),
+                &_ => (),
             },
-        },
-        _ => return,
-    };
+        }
+    } else {
+        ();
+    }
 
-    function(api, message)
+    Ok(())
 }
 
-fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
+async fn check_callback(api: Api, query: CallbackQuery) -> Result<(), Error> {
     let message = query.message;
     println!("{:?}, {:?}", query.data, query.from);
     let mut inline_keyboard = InlineKeyboardMarkup::new();
-    let data = query.data.split(',').collect::<Vec<_>>();
+    let data = query.data.unwrap();
+    let data = data.split(',').collect::<Vec<_>>();
     let date = Local::now().weekday().number_from_monday();
     let connection = establish_connection();
     let group = match data.len() {
@@ -240,7 +229,8 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
     };
     let mut user: User = match select(exists(
         users.filter(tg_id.eq(i64::from(query.from.id) as i32)),
-    )).get_result(&connection)
+    ))
+    .get_result(&connection)
     {
         Ok(true) => users
             .filter(tg_id.eq(i64::from(query.from.id) as i32))
@@ -253,7 +243,8 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
                     tg_name.eq(query.from.first_name),
                     group_id.eq(group.id),
                 )])
-                .execute(&connection).unwrap();
+                .execute(&connection)
+                .unwrap();
             users
                 .filter(tg_id.eq(i64::from(query.from.id) as i32))
                 .get_result(&connection)
@@ -262,94 +253,92 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
         Err(err) => panic!("{:?}", err),
     };
 
-    let mut days = if data.len() == 3 { data[2].parse::<i64>().unwrap_or(0) } else { 0i64 };
+    let days = if data.len() == 3 {
+        data[2].parse::<i64>().unwrap_or(0)
+    } else {
+        0i64
+    };
     // TODAY
     if data[0].contains("day") {
         let out = parsing::parse_day(data[1], date + days as u32, 0);
-        inline_keyboard.add_row(
-            [InlineKeyboardButton::callback(
-                "←",
-                &data[1].to_string(),
-            )].to_vec(),
-        );
-        let edit_text = api.send(
+        inline_keyboard
+            .add_row([InlineKeyboardButton::callback("←", &data[1].to_string())].to_vec());
+        api.send(
             message
-                .edit_text(out)
+                .unwrap()
+                .edit_text(out.await)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(inline_keyboard),
-        );
-        handle.spawn({
-            let future = edit_text;
-
-            future.map_err(|_| ()).map(|_| ())
-        })
+        ).await;
     } else if data[0].contains("week-") {
         //WEEK
         // println!("{:?}", query.data);
         let date = data[0].chars().last().unwrap().to_digit(10).unwrap();
-        let mut days = if data.len() == 3 { data[2].parse::<i64>().unwrap_or(0) } else { 0i64 };
+        let mut days = if data.len() == 3 {
+            data[2].parse::<i64>().unwrap_or(0)
+        } else {
+            0i64
+        };
         let out = parsing::parse_day(data[1], date, days);
 
         inline_keyboard.add_row(
             [InlineKeyboardButton::callback(
                 "←",
                 format!("week,{},{}", &data[1], days),
-            )].to_vec(),
+            )]
+            .to_vec(),
         );
-        let edit_text = api.send(
+        api.send(
             message
-                .edit_text(out)
+                .unwrap()
+                .edit_text(out.await)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(inline_keyboard),
-        );
-        // let edit_keyboard = api.send(message.edit_reply_markup(Some(inline_keyboard)));
-        handle.spawn({
-            let future = edit_text;
-
-            future.map_err(|_| ()).map(|_| ())
-        })
+        )
+        .await;
+    // let edit_keyboard = api.send(message.edit_reply_markup(Some(inline_keyboard)));
     } else if data[0].contains("week") {
         // PRINT WEEK
         // println!("{:?}", query.data);
-        let mut days = if data.len() == 3 { data[2].parse::<i64>().unwrap_or(0) } else { 0i64 };
+        let mut days = if data.len() == 3 {
+            data[2].parse::<i64>().unwrap_or(0)
+        } else {
+            0i64
+        };
         inline_keyboard.add_row(
             [
                 InlineKeyboardButton::callback("Пн", format!("week-1,{},{}", &data[1], days)),
                 InlineKeyboardButton::callback("Вт", format!("week-2,{},{}", &data[1], days)),
                 InlineKeyboardButton::callback("Ср", format!("week-3,{},{}", &data[1], days)),
-            ].to_vec(),
+            ]
+            .to_vec(),
         );
         inline_keyboard.add_row(
             [
                 InlineKeyboardButton::callback("Чт", format!("week-4,{},{}", &data[1], days)),
                 InlineKeyboardButton::callback("Пт", format!("week-5,{},{}", &data[1], days)),
                 InlineKeyboardButton::callback("Сб", format!("week-6,{},{}", &data[1], days)),
-            ].to_vec(),
+            ]
+            .to_vec(),
         );
         inline_keyboard.add_row(
             [
                 InlineKeyboardButton::callback("⇠", format!("week,{},{}", &data[1], days - 7)),
                 InlineKeyboardButton::callback("⇢", format!("week,{},{}", &data[1], days + 7)),
-            ].to_vec(),
+            ]
+            .to_vec(),
         );
-        inline_keyboard.add_row(
-            [InlineKeyboardButton::callback(
-                "←",
-                &data[1].to_string(),
-            )].to_vec(),
-        );
-        let out = parsing::parse_week(data[1], days);
-        let edit_text = api.send(
+        inline_keyboard
+            .add_row([InlineKeyboardButton::callback("←", &data[1].to_string())].to_vec());
+        let out = parsing::parse_week(data[1], days).await;
+        api.send(
             message
+                .unwrap()
                 .edit_text(out)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(inline_keyboard),
-        );
-        handle.spawn({
-            let future = edit_text;
-
-            future.map_err(|_| ()).map(|_| ())
-        })
+        )
+        .await;
     } else if data[0].contains("notify") {
         if user.notify {
             user.notify = false;
@@ -358,23 +347,23 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
         }
         diesel::update(users.find(user.id))
             .set((notify.eq(user.notify), group_id.eq(group.id)))
-            .execute(&connection).unwrap();
+            .execute(&connection)
+            .unwrap();
         // let groups: &Vec<serde_json::Value> = &notify.as_array_mut().unwrap();
 
         inline_keyboard.add_row(
             [
-                InlineKeyboardButton::callback(
-                    "На сегодня",
-                    format!("day,{},0", &group.api_id),
-                ),
+                InlineKeyboardButton::callback("На сегодня", format!("day,{},0", &group.api_id)),
                 InlineKeyboardButton::callback("На завтра", format!("day,{},1", &data[0])),
-            ].to_vec(),
+            ]
+            .to_vec(),
         );
         inline_keyboard.add_row(
             [InlineKeyboardButton::callback(
                 "Неделя",
                 format!("week,{},0", &group.api_id),
-            )].to_vec(),
+            )]
+            .to_vec(),
         );
         // if user.notify {
         //     inline_keyboard.add_row(
@@ -393,36 +382,29 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
         // }
 
         // println!("{:?}", Some(&inline_keyboard));
-        let edit_text = api.send(
+        api.send(
             message
+                .unwrap()
                 .edit_text(format!("Группа - {}", &group.name))
                 .reply_markup(inline_keyboard),
-        );
-        handle.spawn({
-            let future = edit_text;
-
-            future.map_err(|_| ()).map(|_| ())
-        })
+        )
+        .await;
     } else {
         //GROUP
         // println!("{:?}", &query.data);
         inline_keyboard.add_row(
             [
-                InlineKeyboardButton::callback(
-                    "На сегодня",
-                    format!("day,{},0", &group.api_id),
-                ),
-                InlineKeyboardButton::callback(
-                    "На завтра",
-                    format!("day,{},1", &group.api_id),
-                ),
-            ].to_vec(),
+                InlineKeyboardButton::callback("На сегодня", format!("day,{},0", &group.api_id)),
+                InlineKeyboardButton::callback("На завтра", format!("day,{},1", &group.api_id)),
+            ]
+            .to_vec(),
         );
         inline_keyboard.add_row(
             [InlineKeyboardButton::callback(
                 "Неделя",
                 format!("week,{},0", &group.api_id),
-            )].to_vec(),
+            )]
+            .to_vec(),
         );
         // if user.notify {
         //     inline_keyboard.add_row(
@@ -440,120 +422,105 @@ fn check_callback(api: &Api, query: CallbackQuery, handle: &Handle) {
         //     );
         // }
         // println!("{:?}", Some(&inline_keyboard));
-        let edit_text = api.send(
+        api.send(
             message
+                .unwrap()
                 .edit_text(format!("Группа - {}", &group.name))
                 .reply_markup(inline_keyboard),
-        );
-        handle.spawn({
-            let future = edit_text;
-
-            future.map_err(|_| ()).map(|_| ())
-        })
+        )
+        .await;
     }
+    Ok(())
 }
 
-fn main() {
-    let handle = thread::spawn(move || loop {
-        let mut core = Core::new().unwrap();
-        let handle = core.handle();
-        let token = env::var("TELEGRAM_BOT_TOKEN").unwrap();
-        let api = Api::configure(&token).build(core.handle()).unwrap();
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let token = String::from("512619758:AAEnuB3M8Cb9gmMgsrDkeicu-h9hhgonq54");
+    let api = Api::new(token);
 
-        let future = api.stream().for_each(|update| {
-            // api.spawn(UserId::new(79215069).text("alo"));
-            if let UpdateKind::Message(message) = update.kind {
-                check_message(api.clone(), message)
-            } else if let UpdateKind::CallbackQuery(query) = update.kind {
-                check_callback(&api.clone(), query, &handle)
-            }
-            // thread::sleep(Duration::from_secs(1));
-            Ok(())
-        });
+    let mut stream = api.stream();
 
-        match core.run(future) {
-            Ok(res) => {
-                println!("{:?}", res);
-                continue;
-            }
-            Err(err) => {
-                println!("ERROR {:?}", err);
-                continue;
-            }
-        };
-    });
-
-    thread::spawn(move || {
-        let token = env::var("TELEGRAM_BOT_TOKEN").unwrap();
-
-        let mut core = Core::new().unwrap();
-        let api = Api::configure(&token).build(core.handle()).unwrap();
-        loop {
-            let connection = establish_connection();
-            if Local::now().hour() == 20 && Local::now().weekday().number_from_monday() != 6 {
-                let results = users
-                    .filter(notify.eq(true))
-                    .get_results::<User>(&connection)
-                    .unwrap();
-
-                for user in results {
-                    let group = groups
-                        .find(user.group_id)
-                        .get_result::<Group>(&connection)
-                        .unwrap();
-                    let mut out = "Пары на завтра:\n".to_string();
-                    out += &parsing::parse_day(
-                        &group.api_id,
-                        Local::now().checked_add_signed(chrono::Duration::days(1)).unwrap().weekday().number_from_monday(),
-                        0,
-                    );
-                    let mut inline_keyboard = InlineKeyboardMarkup::new();
-                    inline_keyboard.add_row(
-                        [
-                            InlineKeyboardButton::callback(
-                                "На сегодня",
-                                format!("day,{},0", &group.api_id),
-                            ),
-                            InlineKeyboardButton::callback(
-                                "На завтра",
-                                format!("day,{},1", &group.api_id),
-                            ),
-                        ].to_vec(),
-                    );
-                    inline_keyboard.add_row(
-                        [InlineKeyboardButton::callback(
-                            "Неделя",
-                            format!("week,{},0", &group.api_id),
-                        )].to_vec(),
-                    );
-                    // if user.notify {
-                    //     inline_keyboard.add_row(
-                    //         [InlineKeyboardButton::callback(
-                    //             "Выкл. уведомления 🔕",
-                    //             format!("notify,{}", &group.api_id),
-                    //         )].to_vec(),
-                    //     );
-                    // } else {
-                    //     inline_keyboard.add_row(
-                    //         [InlineKeyboardButton::callback(
-                    //             "Вкл. уведомления 🔔 ~20:00",
-                    //             format!("notify,{}", &group.api_id),
-                    //         )].to_vec(),
-                    //     );
-                    // }
-                    core.run(
-                        api.send(
-                            UserId::new(i64::from(user.tg_id))
-                                .text(&out)
-                                .reply_markup(inline_keyboard)
-                                .parse_mode(ParseMode::Markdown),
-                        ),
-                    ).unwrap();
-                }
-            }
-            thread::sleep(Duration::from_secs(1000*60));
+    while let Some(update) = stream.next().await {
+        let update = update.unwrap();
+        if let UpdateKind::Message(message) = update.kind {
+            check_message(api.clone(), message).await?;
+        } else if let UpdateKind::CallbackQuery(query) = update.kind {
+            check_callback(api.clone(), query).await?;
         }
-    });
+    }
 
-    handle.join().unwrap();
+    // thread::spawn(move || {
+    //     let token = env::var("TELEGRAM_BOT_TOKEN").unwrap();
+
+    //     let mut core = Core::new().unwrap();
+    //     let api = Api::configure(&token).build(core.handle()).unwrap();
+    //     loop {
+    //         let connection = establish_connection();
+    //         if Local::now().hour() == 20 && Local::now().weekday().number_from_monday() != 6 {
+    //             let results = users
+    //                 .filter(notify.eq(true))
+    //                 .get_results::<User>(&connection)
+    //                 .unwrap();
+
+    //             for user in results {
+    //                 let group = groups
+    //                     .find(user.group_id)
+    //                     .get_result::<Group>(&connection)
+    //                     .unwrap();
+    //                 let mut out = "Пары на завтра:\n".to_string();
+    //                 out += &parsing::parse_day(
+    //                     &group.api_id,
+    //                     Local::now().checked_add_signed(chrono::Duration::days(1)).unwrap().weekday().number_from_monday(),
+    //                     0,
+    //                 );
+    //                 let mut inline_keyboard = InlineKeyboardMarkup::new();
+    //                 inline_keyboard.add_row(
+    //                     [
+    //                         InlineKeyboardButton::callback(
+    //                             "На сегодня",
+    //                             format!("day,{},0", &group.api_id),
+    //                         ),
+    //                         InlineKeyboardButton::callback(
+    //                             "На завтра",
+    //                             format!("day,{},1", &group.api_id),
+    //                         ),
+    //                     ].to_vec(),
+    //                 );
+    //                 inline_keyboard.add_row(
+    //                     [InlineKeyboardButton::callback(
+    //                         "Неделя",
+    //                         format!("week,{},0", &group.api_id),
+    //                     )].to_vec(),
+    //                 );
+    //                 // if user.notify {
+    //                 //     inline_keyboard.add_row(
+    //                 //         [InlineKeyboardButton::callback(
+    //                 //             "Выкл. уведомления 🔕",
+    //                 //             format!("notify,{}", &group.api_id),
+    //                 //         )].to_vec(),
+    //                 //     );
+    //                 // } else {
+    //                 //     inline_keyboard.add_row(
+    //                 //         [InlineKeyboardButton::callback(
+    //                 //             "Вкл. уведомления 🔔 ~20:00",
+    //                 //             format!("notify,{}", &group.api_id),
+    //                 //         )].to_vec(),
+    //                 //     );
+    //                 // }
+    //                 core.run(
+    //                     api.send(
+    //                         UserId::new(i64::from(user.tg_id))
+    //                             .text(&out)
+    //                             .reply_markup(inline_keyboard)
+    //                             .parse_mode(ParseMode::Markdown),
+    //                     ),
+    //                 ).unwrap();
+    //             }
+    //         }
+    //         thread::sleep(Duration::from_secs(1000*60));
+    //     }
+    // });
+
+    // handle.join().unwrap();
+    Ok(())
 }

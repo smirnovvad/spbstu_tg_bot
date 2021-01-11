@@ -1,4 +1,4 @@
-use schema::{groups, users};
+use crate::schema::{groups, users};
 
 #[derive(Identifiable, Queryable, Associations, PartialEq, Debug)]
 #[table_name = "groups"]
